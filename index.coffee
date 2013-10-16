@@ -1,7 +1,9 @@
 #!/usr/bin/env coffee
 
 fs = require 'fs'
+path = require 'path'
 crypto = require 'crypto'
+util = require 'util'
 {Parser, tree} = require 'less'
 {extend, isString} = require 'underscore'
 
@@ -354,19 +356,128 @@ treeVisitor = defineVisitor baseVisitor,
     @visitRuleset(node.ruleset, options, node.name)
 
 
+sortTree = (node, parent=null) ->
+  impl = Object.create(sortingVisitor)
+  impl.parent = parent
+  node = new tree.visitor(impl).visit(node)
+
+
+isNamespaceDefinition = (node) ->
+  return false unless node.type == 'Ruleset'
+  return false unless node.selectors.length == 1
+  name = renderValue node.selectors[0]
+  return false unless name[0] == '#'
+  return false unless node.rules.every (rule) ->
+    # TODO: variables are also allowed
+    rule.type == 'MixinDefinition' or rule.type == 'Comment'
+  return name.slice(1)
+
+
+graph = []
+mixins = []
+mixinsClass = []
+
+findRootAncestor = (node, parent) ->
+  console.log 'find accesstor .... '
+  console.log util.inspect(parent, {depth: 10})
+  if node.root then return node
+  if !parent or parent.root then return node
+
+  a = parent
+  while a.parent and !a.parent.root
+    a = a.parent
+
+  console.log 'a = ', a
+  return a
+
+sortingVisitor = Object.create
+  parent: null
+  indent: ''
+  increaseIndent: ->
+    @indent + '  '
+  decreaseIndent: ->
+    @indent.slice(0, -2)
+
+  p: (m, indent) ->
+    #indent = indent or @indent
+    #console.log "#{indent}#{m.trim()}"
+
+  isNamespaceDefinition: (node) ->
+    return false unless node.type == 'Ruleset'
+    return false unless node.selectors.length == 1
+    name = renderValue node.selectors[0]
+    return false unless name[0] == '#'
+    return false unless node.rules.every (rule) ->
+      # TODO: variables are also allowed
+      rule.type == 'MixinDefinition' or rule.type == 'Comment'
+    return name.slice(1)
+
+  visitRuleset: (node, options, directive = '') ->
+    unless node.root
+      namespace = @isNamespaceDefinition(node)
+      options.visitDeeper = false
+      if namespace
+        for rule in node.rules
+          # TODO: handle variables
+          if rule.type == 'MixinDefinition'
+            rule.name = ".#{namespace}-#{rule.name.slice(1)}"
+          sortTree(rule, node)
+      else
+        if node.rules.length > 0
+          @p "#{directive}#{node.selectors.map(renderValue).join(', ')}"
+          for rule in node.rules
+            sortTree(rule, node)
+
+      return node
+
+  visitMixinDefinition: (node, options) ->
+    options.visitDeeper = false
+    name = node.name.slice(1)
+    name = mixinMap[name] or name
+    @p "#{name}(#{node.params.map(renderMixinParam).join(', ')})"
+    for rule in node.rules
+      rule = sortTree(rule, node)
+    mixins.push node
+    return node
+
+  visitMixinCall: (node, options) ->
+    console.log 'mixing calls'
+    options.visitDeeper = false
+    if node.selector.elements.length == 2 and node.selector.elements[0].value[0] == '#'
+      namespace = node.selector.elements[0].value.slice(1)
+      node.selector.elements[0] = node.selector.elements[1]
+      delete node.selector.elements[1]
+      node.selector.elements[0].value = "#{namespace}-#{node.selector.elements[0].value.slice(1)}"
+    name = renderValue(node.selector).slice(1)
+    name = mixinMap[name] or name
+    graph.push left: @parent, right: findRootAncestor(node, @parent)
+    if node.arguments.length > 0
+      v = "#{renderValue(node.selector).slice(1)}"
+      v += "(#{node.arguments.map(renderMixinArg).join(', ')})"
+    else
+      v = "@extend .#{renderValue(node.selector).slice(1)}"
+    @p v
+    return node
+
+
 main = ->
 
-  filename = process.argv[2]
+  filename = path.join __dirname, './test.less'
+  #process.argv[2]
   parser = new Parser(filename: filename)
   str = fs.readFileSync(filename).toString()
 
   parser.parse str, (err, node) ->
     throw err if err
-    renderPrelude()
-    renderTree node
+    sortTree node
+    console.log 'graph ---------------'
+    console.log util.inspect(graph, {depth: 10})
+    console.log 'mixins ----------------'
+    console.log util.inspect(mixins, {depth: 10})
+
 
 module.exports = {
   main,
-  treeVisitor, expressionVisitor, baseVisitor,
-  renderValue, renderTree, renderPrelude,
+  treeVisitor, expressionVisitor, baseVisitor, sortingVisitor,
+  renderValue, renderTree, renderPrelude, sortTree
 }

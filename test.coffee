@@ -3,9 +3,10 @@
 path = require 'path'
 fs = require 'fs'
 sys = require 'os'
-{Parser} = require 'less'
+{Parser, tree} = require 'less'
 walk = require 'walk'
 mkdirp = require 'mkdirp'
+StylusVisitor = require './to-stylus-visitor'
 
 usage = '''
 Usage: $0 -r -h -f <lessfile> [destination]
@@ -33,7 +34,7 @@ if argv.h
 source = argv._[0]
 dest = argv._[1]
 if !fs.existsSync source
-  console.log "File #{f} does not exists."
+  console.log "File #{source} does not exists."
   options.showHelp()
 
 source = argv._[0]
@@ -42,7 +43,7 @@ dest = argv._[1]
 fs.stat source, (err, stats) ->
   if stats.isFile()
     processFile source, dest, (err) ->
-      if err then console.err err
+      if err then console.error err
 
   else if stats.isDirectory()
     walker = walk.walk source, {followLinks: argv.f}
@@ -55,11 +56,10 @@ fs.stat source, (err, stats) ->
       srcFile =  "#{source}/#{relativePath}/#{fileStats.name}"
       destFile = "#{destDir}/#{destFilename}"
       processFile srcFile, destFile, (err) ->
-        if err then console.err err
+        if err then console.error err
         next()
   else
     options.showHelp()
-
 
 
 processFile = (src, dest, cb) ->
@@ -74,5 +74,8 @@ processFile = (src, dest, cb) ->
       parser.parse data, (err, node) ->
         if err then return cb err
 
-        console.log node
+        stylusRender = new StylusVisitor tree
+        str = stylusRender.run node
+        #console.log '-------------------'
+        #console.log str
 
